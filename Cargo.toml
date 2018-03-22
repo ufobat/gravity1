@@ -1,0 +1,8 @@
+[package]
+name = "gravity1"
+version = "0.1.0"
+authors = ["Martin Barth <martin@senfdax.de>"]
+
+[dependencies]
+sdl2 = "0.31"
+rand = "0.4"
