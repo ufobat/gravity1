@@ -6,3 +6,4 @@ authors = ["Martin Barth <martin@senfdax.de>"]
 [dependencies]
 sdl2 = "0.31"
 rand = "0.4"
+nalgebra = "0.14.0"

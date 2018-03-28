@@ -1,5 +1,6 @@
 extern crate sdl2;
 extern crate rand;
+extern crate nalgebra;
 
 use sdl2::pixels::Color;
 use sdl2::event::Event;
@@ -9,6 +10,7 @@ use std::time::Duration;
 use std::cell::RefCell;
 use std::error::Error;
 use rand::distributions::{Range, Sample};
+use nalgebra::{Vector2, Similarity2, norm};
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 800;
@@ -20,56 +22,30 @@ struct MainGame {
 }
 
 struct Matter {
-    pos: Vec2D,
+    pos: Vector2<f64>,
     mass: f64,
-    velocity: Vec2D
+    velocity: Vector2<f64>,
+    mass_scaling: Similarity2<f64>,
 }
-
-#[derive(Clone)]
-struct Vec2D {
-    x: f64,
-    y: f64,
-}
-impl Vec2D {
-    fn add_vec(&mut self, other: &Vec2D) {
-        self.x = self.x + other.x;
-        self.y = self.y + other.y;
-    }
-
-    fn del_vec(&mut self, other: &Vec2D) {
-        self.x = self.x - other.x;
-        self.y = self.y - other.y;
-    }
-
-    fn length(&self) -> f64 {
-        return (self.x * self.x + self.y * self.y).sqrt();
-    }
-
-    fn scale(&mut self, factor: f64) {
-        self.x = self.x * factor;
-        self.y = self.y * factor;
-    }
-}
-
 
 impl Matter {
     fn new(pos_x: f64, pos_y: f64, mass: f64) -> Matter {
         Matter {
-            velocity: Vec2D { x: 0f64 , y: 0f64 },
-            pos: Vec2D { x: pos_x , y: pos_y },
+            velocity: Vector2::new(0.0, 0.0),
+            pos: Vector2::new(pos_x ,pos_y),
             mass: mass,
+            mass_scaling: Similarity2::new(Vector2::new(0.0, 0.0), 0.0, 1.0/mass)
         }
     }
 
-    fn apply_force(&mut self, mut force: Vec2D) {
+    fn apply_force(&mut self, mut force: Vector2<f64>) {
         // F = m * a; => a = F / m
         // convert force to "a"
-        force.scale( 1.0 / self.mass );
-        self.velocity.add_vec(&force);
+        self.velocity = &self.velocity + * &self.mass_scaling * force;
     }
 
     fn move_around(&mut self) {
-        self.pos.add_vec(&self.velocity);
+        self.pos = self.pos + self.velocity;
     }
 }
 
@@ -103,7 +79,7 @@ impl Viewport {
         }
     }
 
-    fn to_canvas_pos(&self, pos: &Vec2D) -> (i32, i32) {
+    fn to_canvas_pos(&self, pos: &Vector2<f64>) -> (i32, i32) {
         let x = self.x_shift + pos.x as i32;
         let y = self.y_shift + pos.y as i32;
         return (x, y);
@@ -114,12 +90,11 @@ impl Viewport {
     //     self.y_shift += y;
     // }
 
-    fn adjust_to_drift(&mut self, drift: &Vec2D) {
+    fn adjust_to_drift(&mut self, drift: &Vector2<f64>) {
         self.x_shift = WINDOW_WIDTH as i32  / 2 - drift.x as i32;
         self.y_shift = WINDOW_HEIGHT as i32 / 2 - drift.y as i32;
     }
 }
-
 
 fn main() {
 
@@ -141,22 +116,26 @@ fn main() {
     }
 
     let mut viewport = Viewport::new();
+    let viewscale = Similarity2::new(
+        Vector2::new(0.0, 0.0),
+        0.0,
+        (1.0 / matter.len() as f64)
+    );
 
     'running: loop {
         // ! calculate next step
         for idx_matter in 0..matter.len() {
-            let mut force = Vec2D { x: 0.0, y:0.0 };
+            let mut force = Vector2::new(0.0, 0.0);
             let mut m = matter[idx_matter].borrow_mut();
             for idx_other_matter in 0..matter.len() {
                 if idx_matter == idx_other_matter { continue }
                 let other = matter[idx_other_matter].borrow();
-                let mut from_m_to_other = other.pos.clone();
-                from_m_to_other.del_vec(&m.pos);
-                let distance = from_m_to_other.length();
+                let mut from_m_to_other = other.pos - m.pos;
+                let distance = norm(&from_m_to_other);
                 // force = g * m1 * m2 / r*r
                 let force_factor = 0.003 * m.mass * other.mass / (distance * distance);
-                from_m_to_other.scale(force_factor);
-                force.add_vec(&from_m_to_other);
+                let scale_operation = Similarity2::new(Vector2::new(0.0, 0.0), 0.0, force_factor);
+                force = force + scale_operation * from_m_to_other;
             }
             m.apply_force(force);
             m.move_around();
@@ -167,7 +146,8 @@ fn main() {
         game.canvas.set_draw_color(Color::RGB(0, 0, 0));
         game.canvas.clear();
         game.canvas.set_draw_color(Color::RGB(255,255, 0));
-        let mut viewdrift = Vec2D { x: 0.0 , y: 0.0 };
+
+        let mut viewdrift = Vector2::new(0.0, 0.0);
         let (x, y) = viewport.to_canvas_pos(&viewdrift);
         game.canvas.draw_point(Point::new(x, y)).unwrap();
         // draw matter
@@ -175,13 +155,15 @@ fn main() {
         for matter in matter.iter() {
             let m = matter.borrow();
             let pos = &m.pos;
-            viewdrift.add_vec(pos);
+            viewdrift += pos;
             let (x, y) = viewport.to_canvas_pos(pos);
             // println!("drawing white point to {} {}", x, y);
             game.canvas.draw_point(Point::new(x, y)).unwrap();
         }
         game.canvas.set_draw_color(Color::RGB(255,0,0));
-        viewdrift.scale(1.0 / matter.len() as f64);
+
+        viewdrift = viewscale * viewdrift;
+
         let (x, y) = viewport.to_canvas_pos(&viewdrift);
         game.canvas.draw_point(Point::new(x, y)).unwrap();
         viewport.adjust_to_drift(&viewdrift);
