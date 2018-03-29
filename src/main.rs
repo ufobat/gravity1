@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::cell::RefCell;
 use std::error::Error;
 use rand::distributions::{Range, Sample};
-use nalgebra::{Vector2, Similarity2, norm};
+use nalgebra::{Vector2, Point2, Similarity2, norm};
 
 const WINDOW_WIDTH: u32 = 1200;
 const WINDOW_HEIGHT: u32 = 800;
@@ -34,11 +34,11 @@ impl Matter {
             velocity: Vector2::new(0.0, 0.0),
             pos: Vector2::new(pos_x ,pos_y),
             mass: mass,
-            mass_scaling: Similarity2::new(Vector2::new(0.0, 0.0), 0.0, 1.0/mass)
+            mass_scaling: Similarity2::new(nalgebra::zero(), 0.0, 1.0/mass)
         }
     }
 
-    fn apply_force(&mut self, mut force: Vector2<f64>) {
+    fn apply_force(&mut self, force: Vector2<f64>) {
         // F = m * a; => a = F / m
         // convert force to "a"
         self.velocity = &self.velocity + * &self.mass_scaling * force;
@@ -67,32 +67,29 @@ impl MainGame {
 }
 
 struct Viewport {
-    x_shift: i32,
-    y_shift: i32,
+    viewport: Similarity2<f64>,
+    default: Vector2<f64>
 }
-
 impl Viewport {
     fn new() -> Self {
+        let default = Vector2::new(
+            WINDOW_WIDTH as f64 / 2.0,
+            WINDOW_HEIGHT as f64 / 2.0
+        );
         Viewport {
-            x_shift: WINDOW_WIDTH as i32 / 2,
-            y_shift: WINDOW_HEIGHT as i32 / 2,
+            viewport: Similarity2::new(default.clone(), 0.0, 1.0),
+            default: default
         }
     }
 
-    fn to_canvas_pos(&self, pos: &Vector2<f64>) -> (i32, i32) {
-        let x = self.x_shift + pos.x as i32;
-        let y = self.y_shift + pos.y as i32;
-        return (x, y);
+    fn to_point(&self, pos: &Vector2<f64>) -> Point {
+        let point = self.viewport * Point2::new(pos.x, pos.y);
+        let (x, y) = (point.x.round() as i32 , point.y.round() as i32);
+        Point::new(x, y)
     }
-
-    // fn shift_view(&mut self, x: i32, y: i32) {
-    //     self.x_shift += x;
-    //     self.y_shift += y;
-    // }
-
-    fn adjust_to_drift(&mut self, drift: &Vector2<f64>) {
-        self.x_shift = WINDOW_WIDTH as i32  / 2 - drift.x as i32;
-        self.y_shift = WINDOW_HEIGHT as i32 / 2 - drift.y as i32;
+    fn adjust(&mut self, drift: &Vector2<f64>) {
+        let translation = self.default - drift;
+        self.viewport = Similarity2::new(translation, 0.0, 1.0);
     }
 }
 
@@ -116,11 +113,7 @@ fn main() {
     }
 
     let mut viewport = Viewport::new();
-    let viewscale = Similarity2::new(
-        Vector2::new(0.0, 0.0),
-        0.0,
-        (1.0 / matter.len() as f64)
-    );
+    let mut skip_sleep = false;
 
     'running: loop {
         // ! calculate next step
@@ -130,7 +123,7 @@ fn main() {
             for idx_other_matter in 0..matter.len() {
                 if idx_matter == idx_other_matter { continue }
                 let other = matter[idx_other_matter].borrow();
-                let mut from_m_to_other = other.pos - m.pos;
+                let from_m_to_other = other.pos - m.pos;
                 let distance = norm(&from_m_to_other);
                 // force = g * m1 * m2 / r*r
                 let force_factor = 0.003 * m.mass * other.mass / (distance * distance);
@@ -145,37 +138,39 @@ fn main() {
         // black screen
         game.canvas.set_draw_color(Color::RGB(0, 0, 0));
         game.canvas.clear();
-        game.canvas.set_draw_color(Color::RGB(255,255, 0));
 
+        // draw origin
+        game.canvas.set_draw_color(Color::RGB(255,155, 0));
         let mut viewdrift = Vector2::new(0.0, 0.0);
-        let (x, y) = viewport.to_canvas_pos(&viewdrift);
-        game.canvas.draw_point(Point::new(x, y)).unwrap();
+        let origin_point = viewport.to_point(&viewdrift);
+        game.canvas.draw_point(origin_point).unwrap();
+
         // draw matter
         game.canvas.set_draw_color(Color::RGB(255, 255, 255));
         for matter in matter.iter() {
             let m = matter.borrow();
             let pos = &m.pos;
             viewdrift += pos;
-            let (x, y) = viewport.to_canvas_pos(pos);
+            let point = viewport.to_point(pos);
+
             // println!("drawing white point to {} {}", x, y);
-            game.canvas.draw_point(Point::new(x, y)).unwrap();
+            // println!("!! drawing {:?}", point);
+            game.canvas.draw_point(point).unwrap();
         }
-        game.canvas.set_draw_color(Color::RGB(255,0,0));
 
-        viewdrift = viewscale * viewdrift;
-
-        let (x, y) = viewport.to_canvas_pos(&viewdrift);
-        game.canvas.draw_point(Point::new(x, y)).unwrap();
-        viewport.adjust_to_drift(&viewdrift);
-        println!("viewdrift is {} {}", viewdrift.x, viewdrift.y);
-        // update Screen
         game.canvas.present();
+
+        viewdrift = viewdrift / matter.len() as f64;
+        viewport.adjust(&viewdrift);
 
         for event in game.event_pump.poll_iter() {
             match event {
                 Event::Quit {..} |
                 Event::KeyDown { keycode: Some(Keycode::Escape), ..} => {
                     break 'running
+                }
+                Event::KeyDown { keycode: Some(Keycode::Q), ..} => {
+                    skip_sleep = ! skip_sleep;
                 }
                 // Event::KeyDown { keycode: Some(Keycode::W), ..} => {
                 //     viewport.shift_view(0, 50);
@@ -193,7 +188,8 @@ fn main() {
             }
         }
 
-        ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60 ));
-        //::std::thread::sleep(Duration::new(1, 0 ));
+        if !skip_sleep {
+            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 60 ));
+        }
     }
 }
