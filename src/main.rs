@@ -68,7 +68,8 @@ impl MainGame {
 
 struct Viewport {
     viewport: Similarity2<f64>,
-    default: Vector2<f64>
+    default: Vector2<f64>,
+    zoom: f64
 }
 impl Viewport {
     fn new() -> Self {
@@ -76,9 +77,11 @@ impl Viewport {
             WINDOW_WIDTH as f64 / 2.0,
             WINDOW_HEIGHT as f64 / 2.0
         );
+        let zoom = 1.0;
         Viewport {
-            viewport: Similarity2::new(default.clone(), 0.0, 1.0),
-            default: default
+            viewport: Similarity2::new(default.clone(), 0.0, zoom),
+            default: default,
+            zoom: zoom
         }
     }
 
@@ -89,7 +92,7 @@ impl Viewport {
     }
     fn adjust(&mut self, drift: &Vector2<f64>) {
         let translation = self.default - drift;
-        self.viewport = Similarity2::new(translation, 0.0, 1.0);
+        self.viewport = Similarity2::new(translation, 0.0, self.zoom);
     }
 }
 
